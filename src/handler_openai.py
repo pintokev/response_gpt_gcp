@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, Response
 from openai import OpenAI
 from .handler_gpt_event import handle_event
 from time import time
-handler_data import Data
+from .handler_data import Data
 import requests
 from .Function.tools import tools
 from .Function.functions import categoriser_lignes, count_by_categorie, get_examples_by_categorie, check_factures, \

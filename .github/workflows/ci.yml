@@ -56,7 +56,7 @@ jobs:
           docker logs response-gpt-test
 
       - name: Test endpoint /stream
-        run: |
+        run: |x
           curl --fail -X POST http://localhost:8080/stream \
             -H "Content-Type: application/json" \
             -d '{"id":"Temp","model":"gpt-5.4","content":"Salut !"}'
