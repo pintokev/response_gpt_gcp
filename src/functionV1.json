@@ -1,0 +1,41 @@
+[
+  {
+    "type": "function",
+    "name": "categoriser_lignes",
+    "description": "Catégorise un commentaire reçu pour le support niveau 1 de l'espace client Orange.\nRetourne exactement une valeur de l'enum \"categorie\".\n\nSi le problème concerne la facture, par exemple le téléchargement de facture, la page d'accueil de la rubrique facture, le changement de moyen bancaire, le paiement ou la régularisation de la facture, la gestion des paramètres de facture ou un autre problème lié à la facture, retourner un code \"facture_*\".\n\nSi le problème concerne les offres et options, par exemple la souscription d'option, le changement d'options, un libellé d'option ou d'offre erroné, une page offre et option indisponible ou un autre problème lié aux offres et options, retourner un code \"offre_options_*\".\n\nSi le problème concerne le contrat client, par exemple la mise à jour des informations personnelles, le téléchargement de documents contractuels comme le contrat ou le mandat SEPA, ou un autre problème lié au contrat, retourner un code \"contrat_*\".\n\nSi le problème concerne l'espace client ou la page d'accueil, par exemple un espace client indisponible ou un push à tort sur la page d'accueil, retourner un code \"dashboard_*\".\n\nSi aucune catégorie précédente ne correspond clairement, retourner un code \"autre_*\".\n\nToujours choisir le code le plus précis possible.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "categorie_code": {
+          "type": "string",
+          "description": "Code unique de catégorisation.",
+          "enum": [
+            "facture_telechargement_facture",
+            "facture_page_accueil_rubrique_facture",
+            "facture_changement_moyen_bancaire",
+            "facture_paiement_facture",
+            "facture_gestion_parametres_facture",
+            "facture_autres_problemes_factures",
+
+            "offre_options_souscription_option",
+            "offre_options_changement_offre",
+            "offre_options_libelle_option_offre_errone",
+            "offre_options_page_offre_option_indisponible",
+            "offre_options_autres_problemes_offre_option",
+
+            "contrat_mise_a_jour_informations_personnelles",
+            "contrat_telechargement_document",
+            "contrat_autres_probleme",
+
+            "dashboard_espace_client_indisponible",
+            "dashboard_push_page_accueil_a_tort",
+
+            "autre"
+          ]
+        }
+      },
+      "required": ["categorie_code"],
+      "additionalProperties": false
+    }
+  }
+]
