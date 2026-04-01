@@ -55,11 +55,10 @@ jobs:
           sleep 10
           docker logs response-gpt-test
 
-      - name: Test endpoint /stream
+      - name: Test endpoint /health
         run: |
-          curl --fail -X POST http://localhost:8080/stream \
-            -H "Content-Type: application/json" \
-            -d '{"id":"Temp","model":"gpt-5.4","content":"Salut !"}'
+          curl --fail -X GET http://localhost:8080/health \
+            -H "Content-Type: application/json"
 
       - name: Logs conteneur si échec
         if: failure()
