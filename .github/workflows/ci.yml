@@ -16,8 +16,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout du repo
-        uses: actions/checkout@v5
+			- name: Checkout du repo
+				uses: actions/checkout@v5
+				with:
+					fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -62,7 +64,7 @@ jobs:
 
       - name: Logs conteneur si échec
         if: failure()
-        run: docker logs response-gpt-test
+        run: docker logs response-gpt-test || true
 
       - name: Stopper le conteneur
         if: always()
