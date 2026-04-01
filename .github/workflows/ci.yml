@@ -12,14 +12,14 @@ permissions:
   contents: read
 
 jobs:
-  test-app:
+  response_gpt_gcp:
     runs-on: ubuntu-latest
 
     steps:
-			- name: Checkout du repo
-				uses: actions/checkout@v5
-				with:
-					fetch-depth: 0
+      - name: Checkout du repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
