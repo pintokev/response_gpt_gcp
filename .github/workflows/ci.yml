@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - DEV
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test-app:
+    runs-on: debian-latest
+
+    steps:
+      - name: Checkout du repo
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Installer les dépendances Python
+        run: pip install -r requirements.txt
+
+      - name: Compiler les fichiers Python
+        run: python -m compileall src
+
+      - name: Scan Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+			- name: Build image Docker
+			run: docker build -t response-gpt:test .
+
+			- name: Lancer le conteneur
+			run: |
+				docker run -d \
+				--name response-gpt-test \
+				-p 8080:8080 \
+				-e OPENAI_API_KEY=dummy-test-key \
+				response-gpt:test
+
+			- name: Attendre que l'app démarre
+			run: |
+				for i in {1..20}; do
+				if curl -s http://localhost:8080/ >/dev/null 2>&1; then
+					exit 0
+				fi
+				sleep 2
+				done
+				echo "L'app n'a pas démarré à temps"
+				docker logs response-gpt-test
+				exit 1
+
+      - name: Test endpoint /stream
+        run: |
+          curl --fail -X POST http://localhost:8080/stream \
+            -H "Content-Type: application/json" \
+            -d '{"id":"Temp","model":"gpt-5.4","content":"Salut !"}'
+
+      - name: Logs conteneur si échec
+        if: failure()
+        run: docker logs response-gpt-test
+
+      - name: Stopper le conteneur
+        if: always()
+        run: |
+          docker stop response-gpt-test || true
+          docker rm response-gpt-test || true
