@@ -5,7 +5,7 @@ import os
 import types
 
 import openai
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, stream_with_context
 from openai import OpenAI
 from .handler_gpt_event import handle_event
 from time import time
@@ -91,24 +91,41 @@ def get_client_openai(headers):
     except:
         if PROXY is None: return openai.OpenAI()
         else: return openai.OpenAI(base_url=PROXY)
+
+# def generate_response(client, body, user_data):
+#     def generate():
+#         response = {"ERREUR": "Pas un generateur"}
+#
+#         for data in get_response_with_function_calling(client, user_data, **body):
+#             response = data
+#
+#             if response.get("type") != "complete":
+#                 if "ERREUR" in response:
+#                     yield "ERREUR - " + response["ERREUR"]
+#                 else:
+#                     yield response.get("content", "")
+#             else:
+#                 user_data.add_historique("assistant", response.get("content", ""))
+#                 yield response.get("content", "")
+#
+#         yield "\n"
+#     return generate()
+
 def generate_response(client, body, user_data):
-    def generate():
-        response = {"ERREUR": "Pas un generateur"}
+    full_content = ""
 
-        for data in get_response_with_function_calling(client, user_data, **body):
-            response = data
+    for data in get_response_with_function_calling(client, user_data, **body):
+        if "ERREUR" in data:
+            yield "ERREUR - " + data["ERREUR"] + "\n"
+            return
 
-            if response.get("type") != "complete":
-                if "ERREUR" in response:
-                    yield "ERREUR - " + response["ERREUR"]
-                else:
-                    yield response.get("content", "")
-            else:
-                user_data.add_historique("assistant", response.get("content", ""))
-                yield response.get("content", "")
+        content = data.get("content", "")
+        if content:
+            full_content += content
+            yield content
 
-        yield "\n"
-    return generate()
+    user_data.add_historique("assistant", full_content)
+    yield "\n"
 def get_response_openai(client, user_data, **params):
     debut = time()
     filtered_params = gestion_parametres(client, **params)
@@ -123,61 +140,131 @@ def get_response_openai(client, user_data, **params):
     except KeyError:
         yield filtered_params
 
+# def get_response_with_function_calling(client, user_data, **params):
+#     filtered_params = gestion_parametres(client, **params)
+#     if "ERREUR" in filtered_params:
+#         yield {"ERREUR": filtered_params["ERREUR"]}
+#         return
+#
+#     pipeline = create_pipeline(user_data, stream=True, **filtered_params)
+#     pipeline["stream"] = False
+#
+#     while True:
+#         response = client.responses.create(**pipeline)
+#
+#         assistant_text = []
+#         function_calls = []
+#
+#         for item in response.output:
+#             if item.type == "message":
+#                 for content in item.content:
+#                     if content.type == "output_text":
+#                         assistant_text.append(content.text)
+#
+#             elif item.type == "function_call":
+#                 function_calls.append(item)
+#
+#         if function_calls:
+#             tool_items = []
+#
+#             for call in function_calls:
+#                 tool_items.append({
+#                     "type": "function_call",
+#                     "call_id": call.call_id,
+#                     "name": call.name,
+#                     "arguments": call.arguments
+#                 })
+#
+#                 result = execute_function_call(call.name, call.arguments)
+#
+#                 tool_items.append({
+#                     "type": "function_call_output",
+#                     "call_id": call.call_id,
+#                     "output": json.dumps(result, ensure_ascii=False)
+#                 })
+#
+#             pipeline["input"] = pipeline["input"] + tool_items
+#             pipeline["stream"] = False
+#             continue
+#
+#         final_text = "\n".join(assistant_text).strip()
+#         yield {"type": "complete", "content": final_text}
+#         return
+#
+#
+#
+#     # print(f"Stream de la réponse total en {round(time()-debut, 2)}secs")
+
+
 def get_response_with_function_calling(client, user_data, **params):
     filtered_params = gestion_parametres(client, **params)
     if "ERREUR" in filtered_params:
         yield {"ERREUR": filtered_params["ERREUR"]}
         return
 
-    pipeline = create_pipeline(user_data, stream=False, **filtered_params)
-    pipeline["stream"] = False
+    pipeline = create_pipeline(user_data, stream=True, **filtered_params)
+    pipeline["stream"] = True
 
     while True:
-        response = client.responses.create(**pipeline)
+        text_chunks = []
+        function_calls = {}
 
-        assistant_text = []
-        function_calls = []
+        stream = client.responses.create(**pipeline)
 
-        for item in response.output:
-            if item.type == "message":
-                for content in item.content:
-                    if content.type == "output_text":
-                        assistant_text.append(content.text)
+        for event in stream:
+            event_type = getattr(event, "type", None)
 
-            elif item.type == "function_call":
-                function_calls.append(item)
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "")
+                if delta:
+                    text_chunks.append(delta)
+                    yield {"type": "delta", "content": delta}
+
+            elif event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if item and getattr(item, "type", None) == "function_call":
+                    function_calls[item.id] = {
+                        "call_id": getattr(item, "call_id", None),
+                        "name": getattr(item, "name", ""),
+                        "arguments": ""
+                    }
+
+            elif event_type == "response.function_call_arguments.delta":
+                item_id = getattr(event, "item_id", None)
+                delta = getattr(event, "delta", "")
+                if item_id and item_id in function_calls:
+                    function_calls[item_id]["arguments"] += delta
+
+            elif event_type == "response.completed":
+                break
 
         if function_calls:
             tool_items = []
 
-            for call in function_calls:
+            for fc in function_calls.values():
                 tool_items.append({
                     "type": "function_call",
-                    "call_id": call.call_id,
-                    "name": call.name,
-                    "arguments": call.arguments
+                    "call_id": fc["call_id"],
+                    "name": fc["name"],
+                    "arguments": fc["arguments"]
                 })
 
-                result = execute_function_call(call.name, call.arguments)
-                result = execute_function_call(call.name, call.arguments)
+                result = execute_function_call(fc["name"], fc["arguments"])
 
                 tool_items.append({
                     "type": "function_call_output",
-                    "call_id": call.call_id,
+                    "call_id": fc["call_id"],
                     "output": json.dumps(result, ensure_ascii=False)
                 })
 
             pipeline["input"] = pipeline["input"] + tool_items
-            pipeline["stream"] = False
+            pipeline["stream"] = True
             continue
 
-        final_text = "\n".join(assistant_text).strip()
+        final_text = "".join(text_chunks).strip()
         yield {"type": "complete", "content": final_text}
         return
 
-
-
-    # print(f"Stream de la réponse total en {round(time()-debut, 2)}secs")
 def create_pipeline(user_data, stream=True, **filtered_params):
     pipeline = get_pipeline(stream=stream, **filtered_params)
     conversation = user_data.get_historique()
@@ -232,10 +319,22 @@ def create_ticket_incident(args):
 ########## fin function ##########
 
 ########## Pour toutes utilisation du stream de réponse ##########
+# def handler_stream(headers, body, user_data):
+#     client = get_client_openai(headers)
+#     body = build_stream_body(client, body, user_data)
+#     return Response(generate_response(client, body, user_data), content_type='text/plain; charset=utf-8')
+
 def handler_stream(headers, body, user_data):
     client = get_client_openai(headers)
     body = build_stream_body(client, body, user_data)
-    return Response(generate_response(client, body, user_data), content_type='application/json')
+    return Response(
+        stream_with_context(generate_response(client, body, user_data)),
+        content_type='text/plain; charset=utf-8',
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
 ########## fin du handler du stream ##########
 
 @app.route('/stream', methods=["POST"]) #c
