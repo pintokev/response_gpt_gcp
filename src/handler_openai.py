@@ -17,7 +17,7 @@ from .Function.functions import categoriser_lignes, count_by_categorie, get_exam
     
 app = Flask(__name__)
 app.app_context().push()
-PORT = 8080
+PORT = os.environ.get("PORT", "8080")
 PROXY=os.environ.get("PROXY", None)
 
 nouveau_param_obligatoire = ["content"]

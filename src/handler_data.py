@@ -5,7 +5,8 @@ from json import dump, load
 class Data:
     def __init__(self, id):
         self.id = id
-        self.user_dossier = "data/"+id
+        self.DATA_DIR = os.environ.get("DATA_DIR", "data")
+        self.user_dossier = os.path.join(self.DATA_DIR, str(id))
         self.fichier = ['historique.json', 'instructions.json', 'function_tools.json', 'vector.json', "files.json"]
         self.set_all_path_files()
         self.init_directory()
@@ -26,8 +27,8 @@ class Data:
             tab.append(os.path.join(self.user_dossier , file))
         self.fichier = tab
     def init_directory(self):
-        os.makedirs('data', exist_ok=True)
-        os.makedirs("data/"+str(self.id), exist_ok=True)
+        os.makedirs(self.DATA_DIR, exist_ok=True)
+        os.makedirs(self.DATA_DIR+str(self.id), exist_ok=True)
         for pathfile in self.fichier:
             if not os.path.exists(pathfile):
                 with open(pathfile, 'w') as f:
