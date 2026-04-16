@@ -78,13 +78,6 @@ def get_filtered_params(signature, **params):
     return filtered_params
 ##### Partie OPENAI #####
 def get_client_openai(headers):
-    # print(headers.get('Authorization'))
-    # return OpenAI(api_key=headers.get('Authorization'), base_url=str(BASE_URL))
-    # try:
-    #     if not "sk-" in headers.get('Authorization'): raise
-    #     elif PROXY is None: return openai.OpenAI(api_key=headers.get('Authorization'))
-    #     else: return openai.OpenAI(api_key=headers.get('Authorization'), base_url=PROXY)
-    # except:
     try:
         if PROXY is None: return openai.OpenAI(api_key=os.environ.get("tokenGPT"))
         else: return openai.OpenAI(api_key=os.environ.get("tokenGPT"), base_url=PROXY)
@@ -92,24 +85,6 @@ def get_client_openai(headers):
         if PROXY is None: return openai.OpenAI()
         else: return openai.OpenAI(base_url=PROXY)
 
-# def generate_response(client, body, user_data):
-#     def generate():
-#         response = {"ERREUR": "Pas un generateur"}
-#
-#         for data in get_response_with_function_calling(client, user_data, **body):
-#             response = data
-#
-#             if response.get("type") != "complete":
-#                 if "ERREUR" in response:
-#                     yield "ERREUR - " + response["ERREUR"]
-#                 else:
-#                     yield response.get("content", "")
-#             else:
-#                 user_data.add_historique("assistant", response.get("content", ""))
-#                 yield response.get("content", "")
-#
-#         yield "\n"
-#     return generate()
 
 def generate_response(client, body, user_data):
     full_content = ""
@@ -120,12 +95,15 @@ def generate_response(client, body, user_data):
             return
 
         content = data.get("content", "")
-        if content:
+        type = data.get("type")
+        if content and type == "delta":
             full_content += content
+            # print(">>>>>>>>>>>>>>> debut :", content)
             yield content
 
     user_data.add_historique("assistant", full_content)
     yield "\n"
+
 def get_response_openai(client, user_data, **params):
     debut = time()
     filtered_params = gestion_parametres(client, **params)
@@ -139,62 +117,6 @@ def get_response_openai(client, user_data, **params):
         yield {"ERREUR":"La cle API n'est pas bonne ou inexistante. Il faut la passer (par ordre de priorite) soit dans le Authorization Header ou la mettre dans une variable d'environnement tokenGPT ou OPENAI_API_KEY"}
     except KeyError:
         yield filtered_params
-
-# def get_response_with_function_calling(client, user_data, **params):
-#     filtered_params = gestion_parametres(client, **params)
-#     if "ERREUR" in filtered_params:
-#         yield {"ERREUR": filtered_params["ERREUR"]}
-#         return
-#
-#     pipeline = create_pipeline(user_data, stream=True, **filtered_params)
-#     pipeline["stream"] = False
-#
-#     while True:
-#         response = client.responses.create(**pipeline)
-#
-#         assistant_text = []
-#         function_calls = []
-#
-#         for item in response.output:
-#             if item.type == "message":
-#                 for content in item.content:
-#                     if content.type == "output_text":
-#                         assistant_text.append(content.text)
-#
-#             elif item.type == "function_call":
-#                 function_calls.append(item)
-#
-#         if function_calls:
-#             tool_items = []
-#
-#             for call in function_calls:
-#                 tool_items.append({
-#                     "type": "function_call",
-#                     "call_id": call.call_id,
-#                     "name": call.name,
-#                     "arguments": call.arguments
-#                 })
-#
-#                 result = execute_function_call(call.name, call.arguments)
-#
-#                 tool_items.append({
-#                     "type": "function_call_output",
-#                     "call_id": call.call_id,
-#                     "output": json.dumps(result, ensure_ascii=False)
-#                 })
-#
-#             pipeline["input"] = pipeline["input"] + tool_items
-#             pipeline["stream"] = False
-#             continue
-#
-#         final_text = "\n".join(assistant_text).strip()
-#         yield {"type": "complete", "content": final_text}
-#         return
-#
-#
-#
-#     # print(f"Stream de la réponse total en {round(time()-debut, 2)}secs")
-
 
 def get_response_with_function_calling(client, user_data, **params):
     filtered_params = gestion_parametres(client, **params)
@@ -326,15 +248,15 @@ def create_ticket_incident(args):
 
 def handler_stream(headers, body, user_data):
     client = get_client_openai(headers)
-    body = build_stream_body(client, body, user_data)
-    return Response(
-        stream_with_context(generate_response(client, body, user_data)),
-        content_type='text/plain; charset=utf-8',
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    if "reasonning" not in body:
+        if "tools" not in body: body = {**body, **{"tools": [{"type": "web_search_preview"}]}}
+        else: body["tools"].append({"type": "web_search_preview"})
+    if "instructions" in body and "instructions" in user_data.get_instructions(): body["instructions"] += user_data.get_instructions()["instructions"]
+    if user_data.get_vector(): body["tools"].append({"type": "file_search", "vector_store_ids": user_data.get_vector(), "max_num_results": 20})
+    if user_data.get_files():
+        container = client.containers.create(name="test-container", file_ids=user_data.get_files())
+        body["tools"].append({"type": "code_interpreter", "container": container.id})
+    return Response(generate_response(client, body, user_data), content_type='application/json')
 ########## fin du handler du stream ##########
 
 @app.route('/stream', methods=["POST"]) #c
