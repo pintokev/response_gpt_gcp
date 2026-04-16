@@ -286,6 +286,19 @@ def instructions():
         user_data.change_instructions(body["instruction"])
         return "L'instruction à été modifiée\n", 200
 
+@app.route('/get-instructions', methods=["POST"]) #curl -X GET http://localhost:5000/instructions -H "Content-Type: application/json" -H "Authorization: $tokenGPT" -d '{"id":"Olive", "model":"gpt-4o"}'
+def get_instructions():
+    body = request.json
+
+    try: body.get("id")
+    except: return "Le paramètre id doit être présent dans le post\n", 400
+
+    user_data = Data(body.pop("id"))
+    if "instructions" in user_data.get_instructions():
+        return str(user_data.get_instructions()["instructions"])
+    else: return "Aucune instructions définie"
+
+
 @app.route('/file-search', methods=["POST"]) #curl -X POST http://localhost:8080/file-search -H "Authorization: $tokenGPT" -F "data={\"id\":\"Olive\", \"model\":\"gpt-4.1\"};type=application/json" -F "file=@donnees.txt"
 def file_search():
     headers = request.headers
