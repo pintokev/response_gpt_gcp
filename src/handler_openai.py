@@ -14,11 +14,12 @@ import requests
 from .Function.tools import tools
 from .Function.functions import categoriser_lignes, count_by_categorie, get_examples_by_categorie, check_factures, \
     call_accueil_facture
+from src.config import settings
     
 app = Flask(__name__)
 app.app_context().push()
-PORT = os.environ.get("PORT", "8080")
-PROXY=os.environ.get("PROXY", None)
+PORT = settings.PORT
+PROXY = settings.PROXY
 
 nouveau_param_obligatoire = ["content"]
 nouveau_param_valid = ["image_url"] + nouveau_param_obligatoire
@@ -79,8 +80,8 @@ def get_filtered_params(signature, **params):
 ##### Partie OPENAI #####
 def get_client_openai(headers):
     try:
-        if PROXY is None: return openai.OpenAI(api_key=os.environ.get("tokenGPT"))
-        else: return openai.OpenAI(api_key=os.environ.get("tokenGPT"), base_url=PROXY)
+        if PROXY is None: return openai.OpenAI(api_key=settings.tokenGPT)
+        else: return openai.OpenAI(api_key=settings.tokenGPT, base_url=PROXY)
     except:
         if PROXY is None: return openai.OpenAI()
         else: return openai.OpenAI(base_url=PROXY)

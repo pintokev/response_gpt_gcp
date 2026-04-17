@@ -1,11 +1,12 @@
 import os
 from json import dump, load
+from src.config import settings
 
 
 class Data:
     def __init__(self, id):
         self.id = id
-        self.DATA_DIR = os.environ.get("DATA_DIR", "data")
+        self.DATA_DIR = settings.DATA_DIR
         self.user_dossier = os.path.join(self.DATA_DIR, str(id))
         self.fichier = ['historique.json', 'instructions.json', 'function_tools.json', 'vector.json', "files.json"]
         self.set_all_path_files()
