@@ -1,5 +1,6 @@
 import base64
 import inspect
+import io
 import json
 import os
 import types
@@ -472,65 +473,100 @@ def remove_historique():
         user_data.remove_historique()
         return "L'historique à été supprimé\n", 200
 
+
 @app.route("/images", methods=["POST"])
 def images():
     headers = request.headers
     body = json.loads(request.form.get("data"))
-    try: body.get("id")
-    except: return "Le paramètre id doit être présent dans le post\n", 400
+
+    try:
+        body.get("id")
+    except:
+        return "Le paramètre id doit être présent dans le post\n", 400
+
     user_data = Data(body.pop("id"))
     images = []
-    files = []
-    if user_data.get_historique_image():
-        images.append(user_data.get_historique_image())
-        files.append(user_data.get_historique_image())
-    for i, file in enumerate(request.files.getlist('file')):
-        filename = f"image_{i}.png"
-        file.save(filename)
-        f = open(filename, "rb")
-        images.append(f)
-        files.append(f)
-    client = get_client_openai(headers)
-    if len(images)>0:
-        img = client.images.edit(
-            image=images,
-            **body
-        )
-    else:
-        img = client.images.generate(
-            **body
-        )
-    user_data.add_historique_image(base64.b64decode(img.data[0].b64_json))
-    for f in files:
-        f.close()
-    return img.data[0].b64_json
+    opened_files = []
+
+    try:
+        historique_image = user_data.get_historique_image()
+        if historique_image:
+            images.append(historique_image)
+            opened_files.append(historique_image)
+
+        for i, file in enumerate(request.files.getlist("file")):
+            if not file or file.filename == "":
+                continue
+
+            file_bytes = io.BytesIO(file.read())
+            file_bytes.name = file.filename or f"image_{i}.png"
+
+            images.append(file_bytes)
+            opened_files.append(file_bytes)
+
+        client = get_client_openai(headers)
+
+        if len(images) > 0:
+            img = client.images.edit(
+                image=images,
+                **body
+            )
+        else:
+            img = client.images.generate(
+                **body
+            )
+
+        user_data.add_historique_image(base64.b64decode(img.data[0].b64_json))
+        return img.data[0].b64_json
+
+    finally:
+        for f in opened_files:
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 @app.route("/new_images", methods=["POST"])
 def new_images():
     headers = request.headers
     body = json.loads(request.form.get("data"))
+    body.pop("id", None)
+
     images = []
-    files = []
-    for i, file in enumerate(request.files.getlist('file')):
-        filename = f"image_{i}.png"
-        file.save(filename)
-        f = open(filename, "rb")
-        images.append(f)
-        files.append(f)
-    client = get_client_openai(headers)
-    if len(images)>0:
-        img = client.images.edit(
-            image=images,
-            **body
-        )
-    else:
-        img = client.images.generate(
-            **body
-        )
-    for f in files:
-        f.close()
-    return img.data[0].b64_json
+    opened_files = []
+
+    try:
+        for i, file in enumerate(request.files.getlist("file")):
+            if not file or file.filename == "":
+                continue
+
+            file_bytes = io.BytesIO(file.read())
+            file_bytes.name = file.filename or f"image_{i}.png"
+
+            images.append(file_bytes)
+            opened_files.append(file_bytes)
+
+        client = get_client_openai(headers)
+
+        if len(images) > 0:
+            img = client.images.edit(
+                image=images,
+                **body
+            )
+        else:
+            img = client.images.generate(
+                **body
+            )
+
+        return img.data[0].b64_json
+
+    finally:
+        for f in opened_files:
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 @app.route("/health", methods=["GET"])
