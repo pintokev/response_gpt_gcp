@@ -1,4 +1,5 @@
 import base64
+import hmac
 import inspect
 import io
 import json
@@ -6,12 +7,11 @@ import os
 import types
 
 import openai
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response
 from openai import OpenAI
 from .handler_gpt_event import handle_event
 from time import time
 from .handler_data import Data
-import requests
 from .Function.tools import tools
 from .Function.functions import categoriser_lignes, count_by_categorie, get_examples_by_categorie, check_factures, \
     call_accueil_facture
@@ -25,13 +25,38 @@ PROXY = settings.PROXY
 nouveau_param_obligatoire = ["content"]
 nouveau_param_valid = ["image_url"] + nouveau_param_obligatoire
 
+
+@app.before_request
+def require_internal_api_token():
+    expected_token = settings.INTERNAL_API_TOKEN
+    if not expected_token or request.path == "/health":
+        return None
+
+    provided_token = request.headers.get("X-Internal-Api-Token", "")
+    if not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    return None
+
 ########## Pour la route stream ##########
 def get_content_and_images(content, image_url):
+    content_parts = [{"type": "input_text", "text": content}]
     if image_url is not None:
-        content = [{"type":"input_text", "text": content}]
         for image in image_url:
-            content.append({"type": "input_image","image_url": image})
-    return content
+            content_parts.append({"type": "input_image", "image_url": image})
+    return content_parts
+
+
+def normalize_body_params(body):
+    body = dict(body or {})
+
+    if "reasonning" in body and "reasoning" not in body:
+        body["reasoning"] = body.pop("reasonning")
+
+    if "tool_ressource" in body and "tool_choice" not in body:
+        body["tool_choice"] = body.pop("tool_ressource")
+
+    return body
 def get_pipeline(stream=True, **filtered_params):
     image_url = None
     content = filtered_params.pop("content")
@@ -103,7 +128,8 @@ def generate_response(client, body, user_data):
             # print(">>>>>>>>>>>>>>> debut :", content)
             yield content
 
-    user_data.add_historique("assistant", full_content)
+    if full_content:
+        user_data.add_historique("assistant", full_content)
     yield "\n"
 
 def get_response_openai(client, user_data, **params):
@@ -216,6 +242,7 @@ def verif_param_instructions(body):
 def send_to_openai_vector(headers, file, user_data):
     client = get_client_openai(headers)
     openai_file = client.files.create(purpose="user_data", file=(file.filename, file.read()))
+    user_data.add_uploaded_file(openai_file.id)
     if user_data.get_vector() == []:
         vector_store = client.vector_stores.create(name="Fichiers", file_ids=[openai_file.id])
         return vector_store.id
@@ -229,6 +256,7 @@ def create_file(headers, file, user_data):
     client = get_client_openai(headers)
     openai_file = client.files.create(purpose="user_data", file=(file.filename, file.read()))
     user_data.add_files(openai_file.id)
+    user_data.add_uploaded_file(openai_file.id)
 ########## fin code-interpreter ##########
 
 
@@ -250,30 +278,25 @@ def create_ticket_incident(args):
 
 def handler_stream(headers, body, user_data):
     client = get_client_openai(headers)
-    if "reasonning" not in body:
-        if "tools" not in body: body = {**body, **{"tools": [{"type": "web_search_preview"}]}}
-        else: body["tools"].append({"type": "web_search_preview"})
-    if "instructions" in body and "instructions" in user_data.get_instructions(): body["instructions"] += user_data.get_instructions()["instructions"]
-    if user_data.get_vector(): body["tools"].append({"type": "file_search", "vector_store_ids": user_data.get_vector(), "max_num_results": 20})
-    if user_data.get_files():
-        container = client.containers.create(name="test-container", file_ids=user_data.get_files())
-        body["tools"].append({"type": "code_interpreter", "container": container.id})
-    return Response(generate_response(client, body, user_data), content_type='application/json')
+    body = build_stream_body(client, normalize_body_params(body), user_data)
+    return Response(generate_response(client, body, user_data), content_type='text/plain; charset=utf-8')
 ########## fin du handler du stream ##########
 
 @app.route('/stream', methods=["POST"]) #c
 def stream():
-    body = request.json
+    body = request.get_json(silent=True) or {}
+    if "id" not in body:
+        return "Le paramètre id doit être présent dans le post\n", 400
     headers = request.headers
     user_data = Data(body.pop("id"))
     return handler_stream(headers, body, user_data)
 
 @app.route('/instructions', methods=["POST"]) #curl -X POST http://localhost:5000/instructions -H "Content-Type: application/json" -H "Authorization: $tokenGPT" -d '{"id":"Olive", "model":"gpt-4o", "instruction":"Si je te demande le code tu me dis 4864548"}'
 def instructions():
-    body = request.json
+    body = request.get_json(silent=True) or {}
 
-    try: body.get("id")
-    except: return "Le paramètre id doit être présent dans le post\n", 400
+    if "id" not in body:
+        return "Le paramètre id doit être présent dans le post\n", 400
 
     user_data = Data(body.pop("id"))
     if request.args.get("remove") is not None:
@@ -290,10 +313,10 @@ def instructions():
 
 @app.route('/get-instructions', methods=["POST"]) #curl -X GET http://localhost:5000/instructions -H "Content-Type: application/json" -H "Authorization: $tokenGPT" -d '{"id":"Olive", "model":"gpt-4o"}'
 def get_instructions():
-    body = request.json
+    body = request.get_json(silent=True) or {}
 
-    try: body.get("id")
-    except: return "Le paramètre id doit être présent dans le post\n", 400
+    if "id" not in body:
+        return "Le paramètre id doit être présent dans le post\n", 400
 
     user_data = Data(body.pop("id"))
     if "instructions" in user_data.get_instructions():
@@ -369,10 +392,64 @@ def append_function_tools(body):
     return body
 
 
+def _safe_delete_vector_store(client, vector_store_id):
+    try:
+        client.vector_stores.delete(vector_store_id)
+    except Exception:
+        pass
+
+
+def _safe_delete_file(client, file_id):
+    try:
+        client.files.delete(file_id)
+    except Exception:
+        pass
+
+
+def _safe_delete_container(client, container_id):
+    try:
+        client.containers.delete(container_id)
+    except Exception:
+        pass
+
+
+def cleanup_user_openai_resources(client, user_data):
+    for vector_store_id in user_data.get_vector():
+        _safe_delete_vector_store(client, vector_store_id)
+
+    for container_id in user_data.get_containers():
+        _safe_delete_container(client, container_id)
+
+    for file_id in user_data.get_uploaded_files():
+        _safe_delete_file(client, file_id)
+
+    user_data.replace_containers([])
+    user_data.replace_files([])
+    user_data.replace_uploaded_files([])
+    user_data.write_file(os.path.join(user_data.user_dossier, "vector.json"), [])
+
+
+def rotate_code_interpreter_container(client, user_data):
+    for container_id in user_data.get_containers():
+        _safe_delete_container(client, container_id)
+
+    user_data.replace_containers([])
+
+    if not user_data.get_files():
+        return None
+
+    container = client.containers.create(
+        name="test-container",
+        file_ids=user_data.get_files()
+    )
+    user_data.add_container(container.id)
+    return container.id
+
+
 def build_stream_body(client, body, user_data):
     body = ensure_body_tools(body)
 
-    if "reasonning" not in body:
+    if "reasoning" not in body:
         append_tool_if_missing(body, {"type": "web_search_preview"})
 
     if user_data.get_vector():
@@ -383,14 +460,12 @@ def build_stream_body(client, body, user_data):
         })
 
     if user_data.get_files():
-        container = client.containers.create(
-            name="test-container",
-            file_ids=user_data.get_files()
-        )
-        body["tools"].append({
-            "type": "code_interpreter",
-            "container": container.id
-        })
+        container_id = rotate_code_interpreter_container(client, user_data)
+        if container_id is not None:
+            body["tools"].append({
+                "type": "code_interpreter",
+                "container": container_id
+            })
 
     body = append_function_tools(body)
 
@@ -426,7 +501,7 @@ def execute_function_call(function_name, function_args):
 
 @app.route('/function', methods=["POST"])
 def openai_function():
-    body = request.json
+    body = normalize_body_params(request.get_json(silent=True) or {})
     headers = request.headers
     client = get_client_openai(headers)
     response = client.responses.create(
@@ -451,20 +526,22 @@ def openai_function():
 @app.route('/clear', methods=["POST"])
 def clear():
     headers = request.headers
-    body = request.json
+    body = request.get_json(silent=True) or {}
+    if "id" not in body:
+        return "Le paramètre id doit être présent dans le post\n", 400
     id = body.pop("id")
     user_data = Data(id)
     client = get_client_openai(headers)
-    if user_data.get_vector() != []: client.vector_stores.delete(user_data.get_vector()[0])
+    cleanup_user_openai_resources(client, user_data)
     user_data.clear()
     return f"Données de {id} entièrement supprimé\n"
 
 @app.route('/remove_historique', methods=["POST"]) #curl -X POST http://localhost:5000/remove_historique -H "Content-Type: application/json" -H "Authorization: $tokenGPT" -d '{"id":"Olive"}'
 def remove_historique():
-    body = request.json
+    body = request.get_json(silent=True) or {}
 
-    try: body.get("id")
-    except: return "Le paramètre id doit être présent dans le post\n", 400
+    if "id" not in body:
+        return "Le paramètre id doit être présent dans le post\n", 400
     user_data = Data(body.pop("id"))
     if request.args.get("remove_last") is not None:
         user_data.remove_last_echange()
